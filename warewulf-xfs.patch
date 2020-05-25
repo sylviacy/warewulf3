@@ -1,0 +1,112 @@
+diff --git a/docs/recipes/stateful-provisioning.md b/docs/recipes/stateful-provisioning.md
+index 42262d7..9d6f262 100644
+--- a/docs/recipes/stateful-provisioning.md
++++ b/docs/recipes/stateful-provisioning.md
+@@ -29,7 +29,7 @@ filesystems=mountpoint=/:dev=sda1:type=ext4:size=20480  # specify the filesystem
+ 
+ (Note that these variables do not appear in <tt>node print</tt> . To view the current values, type <tt>object print nodename -p :all</tt>)
+ 
+-Currently supported filesystems are ext2, ext3, ext4, vfat, swap and
++Currently supported filesystems are ext2, ext3, ext4, xfs, vfat, swap and
+ tmpfs. When not set, <tt>filesystems=mountpoint=/:type=tmpfs</tt>. The
+ <tt>filesystems</tt> variable can be used to set up more complex
+ partitioning schemes as well.
+diff --git a/provision/3rd_party/GPL/Makefile.am b/provision/3rd_party/GPL/Makefile.am
+index b7bf571..5b41bcb 100644
+--- a/provision/3rd_party/GPL/Makefile.am
++++ b/provision/3rd_party/GPL/Makefile.am
+@@ -1,4 +1,4 @@
+-dist_gplsrc_DATA = README busybox-1.26.2.tar.bz2 e2fsprogs-1.42.12.tar.gz ipxe-041d362.tar.xz parted-3.2.tar.xz
++dist_gplsrc_DATA = README busybox-1.26.2.tar.bz2 e2fsprogs-1.42.12.tar.gz xfsprogs-4.5.0.tar.gz ipxe-041d362.tar.xz parted-3.2.tar.xz
+ 
+ gplsrcdir = $(prefix)/src/warewulf/3rd_party/GPL/
+ 
+diff --git a/provision/initramfs/Makefile.am b/provision/initramfs/Makefile.am
+index a0c6c2b..b16dcac 100644
+--- a/provision/initramfs/Makefile.am
++++ b/provision/initramfs/Makefile.am
+@@ -16,6 +16,11 @@ E2FSPROGS_SOURCE = $(top_srcdir)/3rd_party/GPL/e2fsprogs-$(E2FSPROGS_VERSION).ta
+ E2FSPROGS_DIR = e2fsprogs-$(E2FSPROGS_VERSION)
+ E2FSPROGS_CONFIGARGS = --disable-testio-debug --disable-debugfs --disable-imager --disable-resizer  --disable-defrag --disable-fsck --disable-tls --disable-uuidd --disable-nls --disable-profile
+ 
++XFSPROGS_VERSION = 4.5.0
++XFSPROGS_SOURCE = $(top_srcdir)/3rd_party/GPL/xfsprogs-$(XFSPROGS_VERSION).tar.gz
++XFSPROGS_DIR = xfsprogs-$(XFSPROGS_VERSION)
++XFSROGS_CONFIGARGS =  --disable-libtool-lock
++
+ LIBARCHIVE_VERSION = 3.3.1
+ LIBARCHIVE_SOURCE = $(top_srcdir)/3rd_party/BSD/libarchive-$(LIBARCHIVE_VERSION).tar.gz
+ LIBARCHIVE_DIR = libarchive-$(LIBARCHIVE_VERSION)
+@@ -44,6 +49,23 @@ e2fsprogs:
+ 		$(MAKE) -C _work/$(E2FSPROGS_DIR);\
+ 	fi
+ 
++xfsprogs:
++	@ if [ ! -d "_work/$(XFSPROGS_DIR)" ]; then \
++		echo "Preparing to build xfsprogs" ;\
++		mkdir -p _work/ ;\
++		tar xzf $(XFSPROGS_SOURCE) -C _work/ ;\
++	fi
++	@ if [ ! -f "_work/$(XFSPROGS_DIR)/mkfs/mkfs.xfs" ]; then \
++		echo "Building xfsprogs" ;\
++		if [ -f "/usr/lib/rpm/config.guess" ]; then \
++			cp /usr/lib/rpm/config.guess _work/$(XFSPROGS_DIR)/config;\
++		fi; \
++		if [ -f "/usr/lib/rpm/config.sub" ]; then \
++                        cp /usr/lib/rpm/config.sub _work/$(XFSPROGS_DIR)/config;\
++		fi; \
++		(cd _work/$(XFSPROGS_DIR)/; ./configure $(XFSPROGS_CONFIGARGS)) ;\
++                $(MAKE) -C _work/$(XFSPROGS_DIR);\
++	fi
+ 
+ busybox:
+ 	@ if [ ! -d "_work/$(BUSYBOX_DIR)" ]; then \
+@@ -90,7 +112,7 @@ parted:
+ 		$(MAKE) -C _work/$(PARTED_DIR);\
+ 	fi
+ 
+-rootfs: busybox e2fsprogs libarchive parted
++rootfs: busybox e2fsprogs xfsprogs libarchive parted
+ 	rm -rf rootfs
+ 	mkdir rootfs
+ 	mkdir rootfs/bin
+@@ -105,6 +127,7 @@ rootfs: busybox e2fsprogs libarchive parted
+ 	chmod -R u+w rootfs/
+ 	cp -a _work/$(BUSYBOX_DIR)/_install/* rootfs/
+ 	cp _work/$(E2FSPROGS_DIR)/misc/mke2fs rootfs/sbin/mkfs.ext4
++	cp _work/$(XFSPROGS_DIR)/mkfs/mkfs.xfs rootfs/sbin/mkfs.xfs
+ 	ln -s mkfs.ext4 rootfs/sbin/mkfs.ext3
+ 	cp -a _work/$(LIBARCHIVE_DIR)/bsdtar rootfs/bin/bsdtar
+ 	$(MAKE) -C _work/$(PARTED_DIR)/ DESTDIR=`pwd`/rootfs install
+diff --git a/provision/initramfs/capabilities/setup-filesystems/20-filesystems b/provision/initramfs/capabilities/setup-filesystems/20-filesystems
+index 0a358e4..c280312 100644
+--- a/provision/initramfs/capabilities/setup-filesystems/20-filesystems
++++ b/provision/initramfs/capabilities/setup-filesystems/20-filesystems
+@@ -93,6 +93,14 @@ run_mkfs() {
+         exit 2
+       }
+     ;;
++    xfs)
++      {
++        /sbin/mkfs.xfs -q -f ${OPTS} "${DEV}" >/dev/null 2>&1 && wwsuccess
++      } || {
++        wwfailure
++        exit 2
++      }
++    ;;
+     vfat)
+       {
+         /sbin/mkfs.vfat ${OPTS} "${DEV}" >/dev/null 2>&1 && wwsuccess
+diff --git a/vnfs/etc/bootstrap.conf b/vnfs/etc/bootstrap.conf
+index a217139..cb0ec2c 100644
+--- a/vnfs/etc/bootstrap.conf
++++ b/vnfs/etc/bootstrap.conf
+@@ -6,7 +6,7 @@ drivers += kernel/drivers/net/, kernel/drivers/scsi/, kernel/drivers/ata/
+ drivers += kernel/drivers/virtio/, kernel/drivers/message/, kernel/drivers/md/
+ drivers += kernel/drivers/block/, kernel/drivers/usb/host/, kernel/drivers/firmware/efi/
+ drivers += nfs, nfsd, nfs_common, nfsv4
+-drivers += fuse, ext2, ext3, ext4
++drivers += fuse, ext2, ext3, ext4, xfs
+ drivers += fat, vfat, nls_cp437, nls_ascii, efivarfs
+ drivers += ipmi_si, ipmi_devintf
+ 
